@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ASL Letter Recognition</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .drop-zone {
+            border: 2px dashed #4a5568;
+            transition: all 0.3s ease;
+        }
+        .drop-zone.dragover {
+            border-color: #4299e1;
+            background-color: #ebf8ff;
+        }
+        .prediction-box {
+            transition: all 0.3s ease;
+        }
+        .prediction-box.active {
+            transform: scale(1.05);
+            box-shadow: 0 0 20px rgba(66, 153, 225, 0.5);
+        }
+        .webcam-prediction {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background-color: rgba(0, 0, 0, 0.7);
+            color: white;
+            padding: 1rem 2rem;
+            border-radius: 1rem;
+            font-size: clamp(2rem, 5vw, 3rem);
+            font-weight: bold;
+            text-align: center;
+            z-index: 10;
+        }
+        @media (max-width: 640px) {
+            .webcam-prediction {
+                padding: 0.5rem 1rem;
+            }
+        }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen">
+    <div class="container mx-auto px-4 py-8">
+        <h1 class="text-3xl md:text-4xl font-bold text-center mb-8">ASL Letter Recognition</h1>
+        
+        <!-- About Section -->
+        <div class="max-w-4xl mx-auto bg-white rounded-lg shadow-md p-6 mb-8">
+            <h2 class="text-2xl font-semibold mb-4">About This Application</h2>
+            <div class="prose max-w-none">
+                <p class="mb-4">
+                    This web application uses advanced machine learning to recognize American Sign Language (ASL) letters in real-time. 
+                    It can identify all 26 letters of the alphabet (A-Z) and additional signs like space and delete.
+                </p>
+                <h3 class="text-xl font-semibold mb-2">Features:</h3>
+                <ul class="list-disc pl-6 mb-4">
+                    <li>Real-time ASL letter recognition using your webcam</li>
+                    <li>Upload images for offline recognition</li>
+                    <li>Advanced image preprocessing for better accuracy</li>
+                    <li>Responsive design for all devices</li>
+                    <li>High-performance prediction with FPS counter</li>
+                </ul>
+                <h3 class="text-xl font-semibold mb-2">How to Use:</h3>
+                <ol class="list-decimal pl-6 mb-4">
+                    <li>Click "Start Camera" to begin real-time recognition</li>
+                    <li>Position your hand clearly in the camera view</li>
+                    <li>Make ASL signs and see the predictions in real-time</li>
+                    <li>Alternatively, upload an image using the file upload section</li>
+                </ol>
+                <p class="text-sm text-gray-600">
+                    Note: For best results, ensure good lighting and a clear background. 
+                    The hand should be clearly visible and centered in the frame.
+                </p>
+            </div>
+        </div>
+
+        <div class="max-w-4xl mx-auto bg-white rounded-lg shadow-md p-6">
+            <!-- Webcam Section -->
+            <div class="mb-8">
+                <h2 class="text-xl font-semibold mb-4">Camera Feed</h2>
+                <div class="relative aspect-video">
+                    <video id="webcam" class="w-full h-full rounded-lg object-cover" autoplay playsinline></video>
+                    <canvas id="canvas" class="hidden"></canvas>
+                    <div id="webcamPrediction" class="webcam-prediction hidden"></div>
+                    <div class="absolute top-4 right-4 bg-black bg-opacity-50 text-white px-3 py-1 rounded-full text-sm">
+                        <span id="fps">0 FPS</span>
+                    </div>
+                </div>
+                <div class="mt-4 flex flex-col sm:flex-row justify-center space-y-2 sm:space-y-0 sm:space-x-4">
+                    <button id="startWebcam" class="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600 transition-colors">
+                        Start Camera
+                    </button>
+                    <button id="stopWebcam" class="bg-red-500 text-white px-4 py-2 rounded hover:bg-red-600 transition-colors" disabled>
+                        Stop Camera
+                    </button>
+                </div>
+            </div>
+
+            <!-- File Upload Section -->
+            <div class="mb-8">
+                <h2 class="text-xl font-semibold mb-4">File Upload</h2>
+                <div id="dropZone" class="drop-zone p-8 text-center rounded-lg cursor-pointer">
+                    <p class="text-gray-600">Drag and drop an image here or click to select</p>
+                    <input type="file" id="fileInput" class="hidden" accept="image/*">
+                </div>
+            </div>
+
+            <!-- Preview Section -->
+            <div class="mb-8">
+                <h2 class="text-xl font-semibold mb-4">Upload Preview</h2>
+                <div class="flex justify-center">
+                    <img id="preview" class="max-w-full h-64 object-contain hidden rounded-lg">
+                </div>
+            </div>
+
+            <!-- Upload Results Section -->
+            <div class="text-center prediction-box p-6 bg-gray-50 rounded-lg">
+                <h3 class="text-xl font-semibold mb-4">Upload Results</h3>
+                <div id="result" class="text-6xl font-bold text-gray-800 mb-2"></div>
+                <div id="confidence" class="text-xl text-gray-600"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Webcam setup
+        const webcam = document.getElementById('webcam');
+        const canvas = document.getElementById('canvas');
+        const startWebcamBtn = document.getElementById('startWebcam');
+        const stopWebcamBtn = document.getElementById('stopWebcam');
+        const preview = document.getElementById('preview');
+        const result = document.getElementById('result');
+        const confidence = document.getElementById('confidence');
+        const dropZone = document.getElementById('dropZone');
+        const fileInput = document.getElementById('fileInput');
+        const fpsDisplay = document.getElementById('fps');
+        const predictionBox = document.querySelector('.prediction-box');
+        let stream = null;
+        let isPredicting = false;
+        let predictionInterval = null;
+        let frameCount = 0;
+        let lastTime = performance.now();
+
+        // Start webcam
+        startWebcamBtn.addEventListener('click', async () => {
+            try {
+                stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { 
+                        width: { ideal: 640 },
+                        height: { ideal: 480 },
+                        facingMode: "user"
+                    } 
+                });
+                webcam.srcObject = stream;
+                startWebcamBtn.disabled = true;
+                stopWebcamBtn.disabled = false;
+                startPrediction();
+            } catch (err) {
+                console.error('Error accessing webcam:', err);
+                alert('Error accessing webcam. Please make sure you have granted camera permissions.');
+            }
+        });
+
+        // Stop webcam
+        stopWebcamBtn.addEventListener('click', () => {
+            if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+                webcam.srcObject = null;
+                startWebcamBtn.disabled = false;
+                stopWebcamBtn.disabled = true;
+                stopPrediction();
+            }
+        });
+
+        function startPrediction() {
+            if (!isPredicting) {
+                isPredicting = true;
+                predictionInterval = setInterval(captureAndPredict, 200); // Predict every 200ms
+            }
+        }
+
+        function stopPrediction() {
+            if (isPredicting) {
+                isPredicting = false;
+                clearInterval(predictionInterval);
+                const webcamPrediction = document.getElementById('webcamPrediction');
+                webcamPrediction.classList.add('hidden');
+                result.textContent = '';
+                confidence.textContent = '';
+                predictionBox.classList.remove('active');
+            }
+        }
+
+        function updateFPS() {
+            const now = performance.now();
+            const elapsed = now - lastTime;
+            frameCount++;
+            
+            if (elapsed >= 1000) {
+                const fps = Math.round((frameCount * 1000) / elapsed);
+                fpsDisplay.textContent = `${fps} FPS`;
+                frameCount = 0;
+                lastTime = now;
+            }
+        }
+
+        async function captureAndPredict() {
+            if (!isPredicting) return;
+
+            canvas.width = webcam.videoWidth;
+            canvas.height = webcam.videoHeight;
+            const ctx = canvas.getContext('2d');
+            
+            // Draw the webcam frame
+            ctx.drawImage(webcam, 0, 0);
+            
+            try {
+                // Get the image data
+                const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                
+                // Create a temporary canvas for preprocessing
+                const tempCanvas = document.createElement('canvas');
+                const tempCtx = tempCanvas.getContext('2d');
+                
+                // Set size for preprocessing
+                tempCanvas.width = 64;
+                tempCanvas.height = 64;
+                
+                // Draw and resize the image
+                tempCtx.drawImage(canvas, 0, 0, 64, 64);
+                
+                // Convert to blob with high quality
+                const blob = await new Promise(resolve => tempCanvas.toBlob(resolve, 'image/jpeg', 0.95));
+                
+                const formData = new FormData();
+                formData.append('file', blob, 'image.jpg');
+
+                const response = await fetch('/predict', {
+                    method: 'POST',
+                    body: formData
+                });
+                const data = await response.json();
+                
+                if (response.ok) {
+                    const webcamPrediction = document.getElementById('webcamPrediction');
+                    if (data.prediction === "No clear sign detected") {
+                        webcamPrediction.textContent = "👋";
+                        webcamPrediction.classList.remove('hidden');
+                    } else {
+                        webcamPrediction.textContent = data.prediction;
+                        webcamPrediction.classList.remove('hidden');
+                    }
+                } else {
+                    throw new Error(data.detail || 'Prediction failed');
+                }
+            } catch (error) {
+                console.error('Prediction error:', error);
+            }
+
+            updateFPS();
+        }
+
+        // File upload handling
+        dropZone.addEventListener('click', () => fileInput.click());
+        dropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropZone.classList.add('dragover');
+        });
+        dropZone.addEventListener('dragleave', () => {
+            dropZone.classList.remove('dragover');
+        });
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('dragover');
+            const file = e.dataTransfer.files[0];
+            if (file && file.type.startsWith('image/')) {
+                handleFile(file);
+            }
+        });
+        fileInput.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (file) {
+                handleFile(file);
+            }
+        });
+
+        function handleFile(file) {
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                preview.src = e.target.result;
+                preview.classList.remove('hidden');
+                
+                // Create a temporary canvas for preprocessing
+                const tempCanvas = document.createElement('canvas');
+                const tempCtx = tempCanvas.getContext('2d');
+                const img = new Image();
+                
+                img.onload = () => {
+                    // Set size for preprocessing
+                    tempCanvas.width = 64;
+                    tempCanvas.height = 64;
+                    
+                    // Draw and resize the image
+                    tempCtx.drawImage(img, 0, 0, 64, 64);
+                    
+                    // Convert to blob with high quality
+                    tempCanvas.toBlob(blob => {
+                        sendImage(blob);
+                    }, 'image/jpeg', 0.95);
+                };
+                
+                img.src = e.target.result;
+            };
+            reader.readAsDataURL(file);
+        }
+
+        // Send image to backend
+        async function sendImage(blob) {
+            const formData = new FormData();
+            formData.append('file', blob, 'image.jpg');
+
+            try {
+                const response = await fetch('/predict', {
+                    method: 'POST',
+                    body: formData
+                });
+                const data = await response.json();
+                
+                if (response.ok) {
+                    result.textContent = `Predicted Letter: ${data.prediction}`;
+                    confidence.textContent = `Confidence: ${(data.confidence * 100).toFixed(2)}%`;
+                } else {
+                    throw new Error(data.detail || 'Prediction failed');
+                }
+            } catch (error) {
+                result.textContent = 'Error: ' + error.message;
+                confidence.textContent = '';
+            }
+        }
+    </script>
+</body>
+</html> 
